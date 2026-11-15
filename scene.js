@@ -1,51 +1,145 @@
-/* Photo backdrop: picks the real city photograph that best matches the sun position,
+/* Backdrop: picks the real photograph or video that best matches the sun position,
    current weather and season of the chosen city, and layers live rain / snow / fog on top. */
 (function () {
   const canvas = document.getElementById('scene');
   const ctx = canvas.getContext('2d');
   const layerEls = [...document.querySelectorAll('#bg .layer')];
+  const videoEl = document.querySelector('#bg video');
 
   const params = new URLSearchParams(location.search); // preview overrides: ?hour=21&weather=snow&month=1
-  const env = { lat: 43.4643, lon: -80.5204, code: 0, cloud: 20, temp: 10, wind: 8 };
+  const env = { lat: 43.4643, lon: -80.5204, code: 0, cloud: 20, temp: 10, wind: 8, view: 'city', motion: true };
 
-  // t: day | gold (sunrise, sunset) | blue (twilight) | night      w: weather the photo shows      s: seasons it suits
-  const PHOTOS = [
-    { id: '1637738297006-40bd0dc8fee0', t: 'day', w: ['clear'], s: ['summer', 'spring'] },
-    { id: '1789561664830-81e65d3d098a', t: 'day', w: ['clear', 'cloud'], s: ['summer', 'spring'] },
-    { id: '1656638706997-11ec84e134d9', t: 'day', w: ['clear'], s: ['autumn'] },
-    { id: '1764824765900-4ff640d69225', t: 'day', w: ['clear'], s: ['autumn'] },
-    { id: '1784984861912-22ac746e766d', t: 'day', w: ['clear'], s: ['spring'] },
-    { id: '1775127493560-6d23cfe56ddb', t: 'day', w: ['cloud'], s: ['spring'] },
-    { id: '1736512642636-423ec6799e76', t: 'day', w: ['clear'], s: ['winter'] },
-    { id: '1644803188464-0f0f66823a95', t: 'day', w: ['cloud', 'snow'], s: ['winter'] },
-    { id: '1641186539288-9c3f26725b12', t: 'day', w: ['snow', 'cloud'], s: ['winter'] },
-    { id: '1769698821841-964dbcf5f72b', t: 'day', w: ['snow'], s: ['winter'] },
-    { id: '1502905704466-2690947baeee', t: 'day', w: ['cloud'] },
-    { id: '1716611342057-ed83a6fa814b', t: 'day', w: ['cloud'] },
-    { id: '1557219525-f4dd82164027', t: 'day', w: ['rain'] },
-    { id: '1518983682921-e8a9e4177988', t: 'day', w: ['rain'] },
-    { id: '1664309761060-f6522c0616c9', t: 'day', w: ['fog'] },
-    { id: '1792103151280-55c23174d0c4', t: 'day', w: ['fog'] },
-    { id: '1756828791052-5cd529e650b5', t: 'gold', w: ['clear'] },
-    { id: '1670813347701-352337009210', t: 'gold', w: ['clear'] },
-    { id: '1768324678501-82940ccabb91', t: 'gold', w: ['fog', 'cloud'] },
-    { id: '1733514719927-0a469f44ed42', t: 'gold', w: ['clear', 'cloud'], s: ['winter'] },
-    { id: '1546447208-9d7b923c0204', t: 'blue', w: ['clear'] },
-    { id: '1759222973482-3c0d90dd8549', t: 'blue', w: ['clear'] },
-    { id: '1741711333479-72849315b098', t: 'blue', w: ['clear', 'cloud'] },
-    { id: '1706950973451-fee757fdff40', t: 'blue', w: ['clear'], s: ['winter'] },
-    { id: '1740151012774-2a9a839bb844', t: 'blue', w: ['snow', 'cloud'], s: ['winter'] },
-    { id: '1664353655151-9d94a9170eb0', t: 'night', w: ['clear', 'cloud'] },
-    { id: '1611323340350-bdcc0e6cfae5', t: 'night', w: ['clear', 'cloud'] },
-    { id: '1725072318216-1a56e31a3049', t: 'night', w: ['rain'] },
-    { id: '1752486345389-ed3b299f34af', t: 'night', w: ['rain'] },
-    { id: '1763393434899-bd2837aab221', t: 'night', w: ['snow'], s: ['winter'] },
-  ];
+  // "time weather[,weather] [season,season] id"
+  //   time: day | gold (sunrise, sunset) | blue (twilight) | night
+  const parse = list => list.trim().split('\n').map(line => {
+    const [t, w, a, b] = line.trim().split(/\s+/);
+    return { t, w: w.split(','), s: b ? a.split(',') : null, id: b || a };
+  });
+
+  const MEDIA = {
+    city: {
+      photos: parse(`
+        day clear summer,spring 1637738297006-40bd0dc8fee0
+        day clear,cloud summer,spring 1789561664830-81e65d3d098a
+        day clear autumn 1656638706997-11ec84e134d9
+        day clear autumn 1764824765900-4ff640d69225
+        day clear spring 1784984861912-22ac746e766d
+        day cloud spring 1775127493560-6d23cfe56ddb
+        day clear winter 1736512642636-423ec6799e76
+        day cloud,snow winter 1644803188464-0f0f66823a95
+        day snow,cloud winter 1641186539288-9c3f26725b12
+        day snow winter 1769698821841-964dbcf5f72b
+        day cloud 1502905704466-2690947baeee
+        day cloud 1716611342057-ed83a6fa814b
+        day rain 1557219525-f4dd82164027
+        day rain 1518983682921-e8a9e4177988
+        day fog 1664309761060-f6522c0616c9
+        day fog 1792103151280-55c23174d0c4
+        gold clear 1756828791052-5cd529e650b5
+        gold clear 1670813347701-352337009210
+        gold fog,cloud 1768324678501-82940ccabb91
+        gold clear,cloud winter 1733514719927-0a469f44ed42
+        blue clear 1546447208-9d7b923c0204
+        blue clear 1759222973482-3c0d90dd8549
+        blue clear,cloud 1741711333479-72849315b098
+        blue clear winter 1706950973451-fee757fdff40
+        blue snow,cloud winter 1740151012774-2a9a839bb844
+        night clear,cloud 1664353655151-9d94a9170eb0
+        night clear,cloud 1611323340350-bdcc0e6cfae5
+        night rain 1725072318216-1a56e31a3049
+        night rain 1752486345389-ed3b299f34af
+        night snow winter 1763393434899-bd2837aab221`),
+      videos: parse(`
+        night clear,cloud 49878
+        night clear,cloud 41161
+        night clear,cloud 34562
+        night rain 4331
+        night rain 4332
+        night fog 9678
+        day snow winter 3323
+        blue clear,cloud 41375
+        blue clear,cloud 49845
+        gold clear 4308
+        day clear,cloud 2034
+        day clear 4000`),
+    },
+    nature: {
+      photos: parse(`
+        day clear summer 1559310589-2673bfe16970
+        day clear summer 1571502297375-0fe3ea2d1d48
+        day clear spring 1713439340151-6f1e7f6fb9c9
+        day clear,cloud spring 1651915745310-a9e32a61cf53
+        day clear autumn 1727911295427-f7e0df078895
+        day clear autumn 1559153668-469d592824a2
+        day cloud autumn 1635250164981-8205b58b11b0
+        day clear winter 1465220183275-1faa863377e3
+        day clear winter 1418985991508-e47386d96a71
+        day cloud winter 1483921020237-2ff51e8e4b22
+        day cloud 1506260408121-e353d10b87c7
+        day cloud 1464131065363-9e30e13470f6
+        day rain 1511884642898-4c92249e20b6
+        day rain,fog 1542273917363-3b1817f69a2d
+        day rain,fog 1692877380682-978925c2195d
+        day fog 1758023822490-d67991c886ca
+        day fog 1634729609790-4655c1b7a94d
+        day fog autumn 1636169419376-fcc395450370
+        day snow winter 1660605483431-60ab69c6fdfb
+        day snow winter 1732183940953-4fabd045d5e3
+        day snow winter 1644256196117-3b2a94686f63
+        gold clear 1500964757637-c85e8a162699
+        gold clear,cloud 1629482472125-a8a8faae4dd6
+        gold clear,cloud 1625465004402-d16eb1e01960
+        blue clear 1604856420566-576ba98b53cd
+        blue clear 1552845108-5f775a2ccb9b
+        blue clear,cloud 1489183988443-b37b7e119ba6
+        blue fog,rain 1644307559162-4aa2eb0d0c8c
+        blue rain,fog 1552486289-7a93ac6d69a5
+        blue clear,snow winter 1610011722905-a2d4b5fca8c0
+        night clear 1519681393784-d120267933ba
+        night clear 1515705576963-95cad62945b6
+        night clear winter 1574610758891-5b809b6e6e2e
+        night snow,cloud winter 1641743442450-702a2dfee4fa`),
+      videos: parse(`
+        day clear summer,spring 5016
+        day clear summer,spring 4078
+        day clear,cloud 1954
+        day clear summer 4366
+        day clear 51791
+        day cloud 4132
+        day cloud summer,spring 41545
+        day clear autumn 9598
+        day clear,cloud autumn 17746
+        day clear autumn 14911
+        day clear winter 4283
+        day rain 22729
+        day rain,fog 22728
+        day fog 47655
+        day fog autumn 35013
+        day fog,cloud winter 3308
+        day snow winter 3352
+        day snow,fog winter 35040
+        gold clear 4119
+        gold clear,cloud 15169
+        gold clear 25163
+        gold clear 5002
+        gold clear summer 40657
+        gold clear winter 28844
+        blue clear 3100
+        blue clear 2168
+        blue clear,cloud 4695
+        blue fog 34841
+        blue clear winter 3350
+        night clear 1704
+        night clear 4148
+        night rain 4422`),
+    },
+  };
+
   const PHASES = ['day', 'gold', 'blue', 'night'];
   const NEAR = { 'clear|cloud': 10, 'cloud|rain': 18, 'cloud|fog': 14, 'cloud|snow': 12, 'fog|rain': 8, 'fog|snow': 8 };
 
   let W = 0, H = 0, DPR = 1;
-  let state = null, shown = null, front = 0, drops = [], flash = 0, running = false;
+  let state = null, shown = null, shownVideo = null, front = 0, drops = [], flash = 0, running = false;
 
   const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 
@@ -94,20 +188,21 @@
     return w;
   }
 
-  // ---------- choosing a photo ----------
+  // ---------- choosing what to show ----------
   function hash(str) { let h = 2166136261; for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) / 4294967296; }
 
-  function choose(phase, wx, seas) {
+  function choose(pool, phase, wx, seas) {
     const day = Math.floor(Date.now() / 864e5);
     let best = null, top = -Infinity;
-    for (const p of PHOTOS) {
+    for (const p of pool) {
       let score = [100, 45, 10, 0][Math.abs(PHASES.indexOf(p.t) - PHASES.indexOf(phase))];
       score += Math.max(...p.w.map(k => k === wx.kind ? 30 : NEAR[[k, wx.kind].sort().join('|')] || 0));
       if (!p.s) score += 7;
       else if (p.s.includes(seas)) score += 14;
-      else if (p.s.includes('winter') && !wx.snow) score -= 60; // no snowy streets in July
-      score += hash(p.id + day) * 5; // rotate between equally good photos from day to day
-      if (score > top) { top = score; best = p; }
+      else if (p.s.includes('winter') && !wx.snow) score -= 60; // no snowy scenes in July
+      const fit = score;
+      score += hash(p.id + day) * 5; // rotate between equally good picks from day to day
+      if (score > top) { top = score; best = { ...p, fit }; }
     }
     return best;
   }
@@ -115,24 +210,38 @@
   function update() {
     const e = sunElevation(now(), env.lat, env.lon);
     const phase = e > 6 ? 'day' : e > -1.5 ? 'gold' : e > -8 ? 'blue' : 'night';
-    const wx = weather();
-    const photo = choose(phase, wx, season());
+    const wx = weather(), seas = season();
+    const set = MEDIA[env.view] || MEDIA.city;
+    const photo = choose(set.photos, phase, wx, seas);
+    let video = env.motion ? choose(set.videos, phase, wx, seas) : null;
+    if (video && video.fit < 118) video = null; // only when it truly matches the time and weather
+    const media = video || photo;
 
-    // colour grade for whatever the photo itself can't show
+    // colour grade for whatever the picture itself can't show
     const tints = [];
-    const gap = PHASES.indexOf(phase) - PHASES.indexOf(photo.t);
+    const gap = PHASES.indexOf(phase) - PHASES.indexOf(media.t);
     if (gap > 0) tints.push(`rgba(8,12,30,${Math.min(.3 * gap, .6)})`);
     if (phase === 'day' && e < 14 && wx.kind === 'clear') tints.push(`rgba(255,170,90,${(.1 * (14 - e) / 8).toFixed(3)})`);
-    if (wx.kind !== 'clear' && !photo.w.some(k => k !== 'clear')) tints.push(phase === 'night' ? 'rgba(40,46,60,.3)' : 'rgba(120,128,140,.32)');
+    if (wx.kind !== 'clear' && !media.w.some(k => k !== 'clear')) tints.push(phase === 'night' ? 'rgba(40,46,60,.3)' : 'rgba(120,128,140,.32)');
     if (wx.storm) tints.push('rgba(10,14,26,.3)');
-    state = { e, phase, wx, photo, tints, fog: wx.fog ? (photo.w.includes('fog') ? .12 : .42) : wx.rain || wx.snow ? .1 : 0 };
+    const showsIt = !!video && media.w.includes(wx.kind); // footage already has its own rain or snow
+    state = {
+      e, phase, wx, tints, amount: showsIt ? .35 : 1,
+      fog: wx.fog ? (media.w.includes('fog') ? .12 : .42) : wx.rain || wx.snow ? .1 : 0,
+    };
 
-    show(photo);
+    // brighter scenes get a stronger shade behind the clock
+    const bright = media.t === 'day' ? (media.w.some(k => k === 'fog' || k === 'snow' || k === 'cloud') ? .5 : .42)
+      : media.t === 'gold' ? .36 : media.t === 'blue' ? .26 : .2;
+    document.documentElement.style.setProperty('--scrim', bright);
+
+    showPhoto(photo);
+    showVideo(video);
     draw();
     if ((wx.rain || wx.snow) && !running) { running = true; requestAnimationFrame(loop); }
   }
 
-  function show(photo) {
+  function showPhoto(photo) {
     const step = 320; // request a size close to the screen so both orientations get a proper crop
     const w = Math.min(3840, Math.ceil(W * DPR / step) * step), h = Math.min(3840, Math.ceil(H * DPR / step) * step);
     const url = `https://images.unsplash.com/photo-${photo.id}?auto=format&fit=crop&q=80&w=${w}&h=${h}`;
@@ -150,6 +259,18 @@
     img.src = url;
   }
 
+  function showVideo(video) {
+    const id = video ? video.id : null;
+    if (id === shownVideo) return;
+    shownVideo = id;
+    videoEl.classList.remove('on');
+    if (!id) { setTimeout(() => { if (!shownVideo) { videoEl.removeAttribute('src'); videoEl.load(); } }, 2600); return; }
+    videoEl.src = `https://assets.mixkit.co/videos/${id}/${id}-720.mp4`;
+    videoEl.play().catch(() => { /* autoplay blocked: the photo stays */ });
+  }
+  videoEl.addEventListener('playing', () => { if (shownVideo) videoEl.classList.add('on'); });
+  videoEl.addEventListener('error', () => { videoEl.classList.remove('on'); });
+
   // ---------- weather overlay ----------
   function draw(t = 0) {
     if (!state || !W || !H) return;
@@ -164,7 +285,7 @@
       ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     }
 
-    const wx = state.wx, amt = wx.rain || wx.snow;
+    const wx = state.wx, amt = (wx.rain || wx.snow) * state.amount;
     const want = amt ? Math.round(amt * (wx.rain ? 240 : 190) * clamp(W * H / 9e5, .5, 2.2)) : 0;
     while (drops.length < want) drops.push({ x: Math.random() * 1.2 - .1, y: Math.random(), z: .35 + Math.random() * .65, p: Math.random() * 6.28 });
     drops.length = Math.min(drops.length, want);

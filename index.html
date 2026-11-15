@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="bg" aria-hidden="true"><div class="layer"></div><div class="layer"></div></div>
+<div id="bg" aria-hidden="true"><div class="layer"></div><div class="layer"></div><video muted loop playsinline preload="auto" disablepictureinpicture></video></div>
 <canvas id="scene" aria-hidden="true"></canvas>
 <div class="shade" aria-hidden="true"></div>
 
@@ -26,11 +26,11 @@
   <div class="tools">
     <section id="timer" class="card" aria-label="Timer">
       <div class="card-label">Timer</div>
-      <div id="timerDisplay" class="readout">25:00</div>
+      <div id="timerDisplay" class="readout">30:00</div>
       <div id="timerPresets" class="presets">
         <button data-min="15">15</button>
-        <button data-min="25">25</button>
-        <button data-min="50">50</button>
+        <button data-min="30">30</button>
+        <button data-min="60">60</button>
         <label class="custom"><input id="timerCustom" type="number" min="1" max="600" inputmode="numeric" aria-label="Custom minutes"><span>min</span></label>
       </div>
       <div class="controls">
@@ -86,16 +86,35 @@
 <!-- Calendar -->
 <dialog id="calDialog" class="sheet">
   <div class="sheet-head">
-    <button id="calPrev" class="icon" aria-label="Previous month">‹</button>
-    <div class="grow center">
-      <h2 id="calTitle"></h2>
-      <p id="calTotal" class="muted"></p>
+    <h2 class="grow">Focus log</h2>
+    <div id="calMode" class="seg" role="tablist">
+      <button data-mode="month" class="on">Month</button>
+      <button data-mode="year">Year</button>
     </div>
-    <button id="calNext" class="icon" aria-label="Next month">›</button>
     <button class="icon close" data-close aria-label="Close">×</button>
   </div>
-  <div class="cal-week"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
-  <div id="calGrid" class="cal-grid"></div>
+
+  <div id="monthView">
+    <div class="cal-week"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+    <div id="months" class="months" tabindex="0" aria-label="Months, scroll to browse"></div>
+  </div>
+
+  <div id="yearView" hidden>
+    <div class="year-head">
+      <button id="yearPrev" class="icon" aria-label="Previous year">‹</button>
+      <div class="grow center">
+        <h2 id="yearTitle"></h2>
+        <p id="yearTotal" class="muted"></p>
+      </div>
+      <button id="yearNext" class="icon" aria-label="Next year">›</button>
+    </div>
+    <div class="heat-wrap">
+      <div id="heatMonths" class="heat-months"></div>
+      <div id="heat" class="heat"></div>
+    </div>
+    <div class="heat-legend"><span>Less</span><i style="--a:.07"></i><i style="--a:.3"></i><i style="--a:.5"></i><i style="--a:.75"></i><i style="--a:1"></i><span>More</span></div>
+  </div>
+
   <div class="day-detail">
     <h3 id="dayTitle"></h3>
     <ul id="dayList"></ul>
@@ -117,6 +136,15 @@
   <ul id="cityResults" class="results"></ul>
   <p id="cityCurrent" class="muted"></p>
 
+  <h3>Background</h3>
+  <label class="opt"><span>View</span>
+    <select id="optView">
+      <option value="city">City</option>
+      <option value="nature">Landscape</option>
+    </select>
+  </label>
+  <label class="opt"><span>Moving video when available</span><input id="optMotion" type="checkbox"></label>
+
   <h3>Clock</h3>
   <label class="opt"><span>Time format</span>
     <select id="optHour">
@@ -137,7 +165,7 @@
       <option value="f">°F</option>
     </select>
   </label>
-  <p class="muted credit">Photos from <a href="https://unsplash.com" target="_blank" rel="noopener">Unsplash</a> · weather from Open-Meteo</p>
+  <p class="muted credit">Photos from <a href="https://unsplash.com" target="_blank" rel="noopener">Unsplash</a> · video from <a href="https://mixkit.co" target="_blank" rel="noopener">Mixkit</a> · weather from Open-Meteo</p>
 </dialog>
 
 <script src="scene.js"></script>
