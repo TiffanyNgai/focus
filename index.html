@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Focus</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%231b2a4a'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffd58a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="scene" aria-hidden="true"></canvas>
+<div class="shade" aria-hidden="true"></div>
+
+<header class="top">
+  <button id="place" class="chip" title="Change city">Waterloo</button>
+</header>
+
+<main class="stage">
+  <section id="clock" class="clock">
+    <div id="time" class="time">--:--</div>
+    <div id="date" class="date"></div>
+  </section>
+
+  <div class="tools">
+    <section id="timer" class="card" aria-label="Timer">
+      <div class="card-label">Timer</div>
+      <div id="timerDisplay" class="readout">25:00</div>
+      <div id="timerPresets" class="presets">
+        <button data-min="15">15</button>
+        <button data-min="25">25</button>
+        <button data-min="50">50</button>
+        <label class="custom"><input id="timerCustom" type="number" min="1" max="600" inputmode="numeric" aria-label="Custom minutes"><span>min</span></label>
+      </div>
+      <div class="controls">
+        <button id="timerToggle" class="btn primary">Start</button>
+        <button id="timerStop" class="btn" hidden>Stop</button>
+      </div>
+    </section>
+
+    <section id="stopwatch" class="card" aria-label="Stopwatch">
+      <div class="card-label">Stopwatch</div>
+      <div id="swDisplay" class="readout">00:00:00</div>
+      <div class="controls">
+        <button id="swToggle" class="btn primary">Start</button>
+        <button id="swStop" class="btn" hidden>Stop</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<nav class="dock" aria-label="Controls">
+  <button id="tClock" title="Show / hide clock" aria-label="Toggle clock">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+  </button>
+  <button id="tTimer" title="Show / hide timer" aria-label="Toggle timer">
+    <svg viewBox="0 0 24 24"><path d="M7 3.5h10M7 20.5h10M8 3.5c0 5 8 5 8 8.5s-8 3.5-8 8.5M16 3.5c0 5-8 5-8 8.5s8 3.5 8 8.5"/></svg>
+  </button>
+  <button id="tStopwatch" title="Show / hide stopwatch" aria-label="Toggle stopwatch">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4M9.5 3h5M12 3v3M18.5 7l1.200-1.200"/></svg>
+  </button>
+  <span class="sep"></span>
+  <button id="openCal" title="Focus calendar" aria-label="Open focus calendar">
+    <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
+  </button>
+  <button id="openSet" title="Settings" aria-label="Open settings">
+    <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+  </button>
+</nav>
+
+<!-- Log a finished session -->
+<dialog id="logDialog" class="sheet small">
+  <form id="logForm" method="dialog">
+    <h2 id="logTitle">Nice work</h2>
+    <p id="logMeta" class="muted"></p>
+    <input id="logTask" type="text" placeholder="What did you work on?" maxlength="120" autocomplete="off" list="recentTasks">
+    <datalist id="recentTasks"></datalist>
+    <div class="row end">
+      <button type="button" id="logSkip" class="btn">Don't log</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Calendar -->
+<dialog id="calDialog" class="sheet">
+  <div class="sheet-head">
+    <button id="calPrev" class="icon" aria-label="Previous month">‹</button>
+    <div class="grow center">
+      <h2 id="calTitle"></h2>
+      <p id="calTotal" class="muted"></p>
+    </div>
+    <button id="calNext" class="icon" aria-label="Next month">›</button>
+    <button class="icon close" data-close aria-label="Close">×</button>
+  </div>
+  <div class="cal-week"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+  <div id="calGrid" class="cal-grid"></div>
+  <div class="day-detail">
+    <h3 id="dayTitle"></h3>
+    <ul id="dayList"></ul>
+  </div>
+</dialog>
+
+<!-- Settings -->
+<dialog id="setDialog" class="sheet small">
+  <div class="sheet-head">
+    <h2 class="grow">Settings</h2>
+    <button class="icon close" data-close aria-label="Close">×</button>
+  </div>
+
+  <h3>City</h3>
+  <form id="cityForm" class="row">
+    <input id="cityInput" type="text" placeholder="Search a city…" autocomplete="off">
+    <button class="btn" type="submit">Search</button>
+  </form>
+  <ul id="cityResults" class="results"></ul>
+  <p id="cityCurrent" class="muted"></p>
+
+  <h3>Clock</h3>
+  <label class="opt"><span>Time format</span>
+    <select id="optHour">
+      <option value="24">24-hour</option>
+      <option value="12">12-hour</option>
+    </select>
+  </label>
+  <label class="opt"><span>Show seconds</span><input id="optSeconds" type="checkbox"></label>
+  <label class="opt"><span>Show date</span><input id="optDate" type="checkbox"></label>
+
+  <h3>Show on screen</h3>
+  <label class="opt"><span>Clock</span><input id="optClock" type="checkbox"></label>
+  <label class="opt"><span>Timer</span><input id="optTimer" type="checkbox"></label>
+  <label class="opt"><span>Stopwatch</span><input id="optStopwatch" type="checkbox"></label>
+  <label class="opt"><span>Temperature</span>
+    <select id="optUnit">
+      <option value="c">°C</option>
+      <option value="f">°F</option>
+    </select>
+  </label>
+</dialog>
+
+<script src="scene.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
