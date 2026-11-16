@@ -1,0 +1,11 @@
+name = "focus-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://tiffanyngai.github.io,http://localhost:4173"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "focus"
+database_id = "98fa6898-d895-49da-8c19-36c5e99e0b87"

@@ -8,3 +8,9 @@ Weather and city search use the free Open-Meteo API; photos are loaded from Unsp
 
 Preview any conditions with URL parameters, e.g. `?hour=21&weather=snow&month=1`
 (`weather`: clear, cloudy, fog, drizzle, rain, snow, storm).
+
+## Profiles and focusing together
+
+`worker/` holds a small Cloudflare Worker (with a D1 database) that stores profiles and synced sessions and
+counts who is focusing right now. A profile is a username plus a private sync code; there is no password or email.
+Deploy changes with `npx wrangler deploy` from `worker/` (needs Node 22+).

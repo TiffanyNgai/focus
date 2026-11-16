@@ -18,6 +18,11 @@
 
 <header class="top">
   <button id="place" class="chip" title="Change city">Waterloo</button>
+  <span class="grow"></span>
+  <div class="together-wrap">
+    <button id="together" class="chip" hidden aria-expanded="false"><i class="pulse"></i><span id="togetherText"></span></button>
+    <div id="togetherList" class="popover" hidden></div>
+  </div>
 </header>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -140,6 +145,31 @@
   </form>
   <ul id="cityResults" class="results"></ul>
   <p id="cityCurrent" class="muted"></p>
+
+  <h3>Profile</h3>
+  <div id="profileOut">
+    <p class="muted">Pick a username to keep your log across devices and show your name to others while you focus. There is no password: you get a private sync code instead.</p>
+    <form id="profileForm" class="row">
+      <input id="profName" type="text" placeholder="Username" maxlength="20" autocomplete="off">
+      <button class="btn" type="submit">Create</button>
+    </form>
+    <details class="link">
+      <summary>I already have a profile</summary>
+      <form id="linkForm">
+        <input id="linkName" type="text" placeholder="Username" maxlength="20" autocomplete="off">
+        <input id="linkCode" type="text" placeholder="Sync code" maxlength="24" autocomplete="off" spellcheck="false">
+        <button class="btn" type="submit">Link this device</button>
+      </form>
+    </details>
+  </div>
+  <div id="profileIn" hidden>
+    <p class="who">Signed in as <b id="profWho"></b></p>
+    <div class="opt"><span>Sync code</span><span class="code-row"><code id="profCode"></code><button id="profShow" class="mini" type="button">Show</button></span></div>
+    <p class="muted">Enter this username and code on another device to link it. Anyone who has the code can see and change your log, so keep it private.</p>
+    <p id="syncState" class="muted"></p>
+    <div class="row end"><button id="profSignOut" class="btn" type="button">Sign out on this device</button></div>
+  </div>
+  <p id="profMsg" class="muted" role="status"></p>
 
   <h3>Background</h3>
   <label class="opt"><span>View</span>

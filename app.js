@@ -186,6 +186,9 @@
     $('#swToggle').textContent = sw.running ? 'Pause' : sw.started ? 'Resume' : 'Start';
     $('#swStop').hidden = !sw.started;
 
+    const focusing = timer.running || sw.running; // focus mode = a timer or stopwatch is actually running
+    if (focusing !== wasFocusing) { wasFocusing = focusing; beat(); }
+
     document.title = timer.running ? `${fmtClock(Math.ceil(left / 1000) * 1000)} · Focus` : sw.running ? `${fmtClock(sw.elapsed(), true)} · Focus` : 'Focus';
   }
   setInterval(tick, 250);
@@ -211,9 +214,10 @@
   }
   function closeLog(save) {
     if (save && pending) {
-      sessions.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        task: $('#logTask').value.trim() || 'Focus session', ...pending });
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      sessions.push({ id, task: $('#logTask').value.trim() || 'Focus session', ...pending });
       saveSessions();
+      queueSync({ add: [id] });
       if ($('#calDialog').open) renderCal(true);
     }
     pending = null;
@@ -341,7 +345,7 @@
         const yes = el('button', { className: 'mini danger', textContent: 'Remove' });
         cancel.addEventListener('click', normal);
         yes.addEventListener('click', () => {
-          sessions = sessions.filter(x => x.id !== s.id); saveSessions(); renderCal(true);
+          sessions = sessions.filter(x => x.id !== s.id); saveSessions(); renderCal(true); queueSync({ remove: [s.id] });
         });
         li.className = 'confirm';
         li.replaceChildren(el('span', { className: 'task', textContent: `Remove “${s.task}” (${fmtDur(s.ms)})? This can’t be undone.` }), cancel, yes);
@@ -362,7 +366,7 @@
 
   // ---------- settings + city + weather ----------
   const setDialog = $('#setDialog');
-  const openSettings = () => { $('#cityResults').replaceChildren(); $('#cityInput').value = ''; renderPlace(); setDialog.showModal(); };
+  const openSettings = () => { $('#cityResults').replaceChildren(); $('#cityInput').value = ''; $('#profMsg').textContent = ''; renderPlace(); renderProfile(); setDialog.showModal(); };
   $('#openSet').addEventListener('click', openSettings);
   $('#place').addEventListener('click', () => { openSettings(); $('#cityInput').focus(); });
   for (const d of [calDialog, setDialog]) {
@@ -426,7 +430,143 @@
     } catch { note('Could not search right now.'); }
   });
 
+  // ---------- profile, sync across devices, focusing together ----------
+  const API = 'https://focus-api.tiffanyngai817.workers.dev';
+  let clientId = store.get('focus.client', null);
+  if (!clientId) { clientId = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); store.set('focus.client', clientId); }
+
+  async function api(path, method = 'GET', body) {
+    const p = settings.profile, headers = {};
+    if (p) headers.authorization = `Bearer ${encodeURIComponent(p.name)}|${p.code}`;
+    if (body) headers['content-type'] = 'application/json';
+    const r = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || 'Something went wrong. Try again.'), { status: r.status });
+    return j;
+  }
+
+  // Sessions: changes made here are queued, sent, and then the profile's full list replaces the local one.
+  const outbox = store.get('focus.outbox', { add: [], remove: [] });
+  let syncing = Promise.resolve();
+  function queueSync(change = {}) {
+    if (!settings.profile) return;
+    outbox.add.push(...(change.add || [])); outbox.remove.push(...(change.remove || []));
+    store.set('focus.outbox', outbox);
+    syncing = syncing.then(syncNow);
+  }
+  async function syncNow() {
+    if (!settings.profile) return;
+    const state = t => { $('#syncState').textContent = t; };
+    try {
+      for (const id of [...outbox.remove]) { await api('/sessions/' + id, 'DELETE'); outbox.remove.splice(outbox.remove.indexOf(id), 1); }
+      const sending = sessions.filter(s => outbox.add.includes(s.id));
+      if (sending.length) await api('/sessions', 'POST', { sessions: sending });
+      outbox.add = outbox.add.filter(id => !sending.some(s => s.id === id));
+      store.set('focus.outbox', outbox);
+      const remote = (await api('/sessions')).sessions;
+      const pending = sessions.filter(s => outbox.add.includes(s.id) && !remote.some(r => r.id === s.id)); // logged while this was in flight
+      sessions = [...remote, ...pending]; saveSessions();
+      if (calDialog.open) renderCal(true);
+      state(`Synced · ${sessions.length} session${sessions.length === 1 ? '' : 's'}`);
+    } catch (e) {
+      store.set('focus.outbox', outbox);
+      if (e.status === 401) { state('This device is no longer linked. Sign out and link again.'); }
+      else state('Offline. Changes will sync when you are back online.');
+    }
+  }
+
+  function renderProfile() {
+    const p = settings.profile;
+    $('#profileOut').hidden = !!p; $('#profileIn').hidden = !p;
+    if (!p) return;
+    $('#profWho').textContent = p.name;
+    $('#profCode').textContent = '••••-••••-••••-••••';
+    $('#profShow').textContent = 'Show';
+  }
+  function signedIn(name, code, msg) {
+    settings.profile = { name, code }; saveSettings();
+    renderProfile();
+    $('#profMsg').textContent = msg;
+    queueSync({ add: sessions.map(s => s.id) }); // bring what is already on this device into the profile
+    beat();
+  }
+  $('#profileForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = $('#profName').value.trim();
+    if (!name) return;
+    $('#profMsg').textContent = 'Creating…';
+    try {
+      const r = await api('/profile', 'POST', { name });
+      signedIn(r.name, r.code, 'Profile created. Note your sync code somewhere safe: it is the only way to link another device.');
+      $('#profCode').textContent = r.code; $('#profShow').textContent = 'Hide';
+      $('#profName').value = '';
+    } catch (err) { $('#profMsg').textContent = err.message; }
+  });
+  $('#linkForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = $('#linkName').value.trim(), code = $('#linkCode').value.trim().toUpperCase();
+    if (!name || !code) return;
+    $('#profMsg').textContent = 'Linking…';
+    settings.profile = { name, code };
+    try {
+      const r = await api('/profile');
+      signedIn(r.name, code, 'This device is linked.');
+      $('#linkName').value = ''; $('#linkCode').value = '';
+    } catch (err) { settings.profile = null; $('#profMsg').textContent = err.message; }
+  });
+  $('#profShow').addEventListener('click', () => {
+    const hidden = $('#profShow').textContent === 'Show';
+    $('#profCode').textContent = hidden ? settings.profile.code : '••••-••••-••••-••••';
+    $('#profShow').textContent = hidden ? 'Hide' : 'Show';
+  });
+  $('#profSignOut').addEventListener('click', () => {
+    settings.profile = null; saveSettings();
+    outbox.add = []; outbox.remove = []; store.set('focus.outbox', outbox);
+    renderProfile(); beat();
+    $('#profMsg').textContent = 'Signed out. Your log stays in your profile, and a copy stays on this device.';
+  });
+
+  // Focusing together: ping while a timer or stopwatch runs; everyone (named or not) can see the count.
+  let wasFocusing = null, lastSnap = null;
+  async function beat() {
+    const focusing = timer.running || sw.running;
+    try {
+      lastSnap = focusing || wasFocusing === false && lastSnap && lastSnap.self
+        ? await api('/presence', 'POST', { client: clientId, focusing })
+        : await api('/presence?client=' + clientId);
+      lastSnap.self = focusing;
+    } catch { lastSnap = null; }
+    renderTogether();
+  }
+  function renderTogether() {
+    const chip = $('#together'), s = lastSnap;
+    const others = s ? s.others : 0;
+    chip.hidden = !s || (!s.self && !others);
+    if (chip.hidden) { $('#togetherList').hidden = true; return; }
+    const people = n => `${n} ${n === 1 ? 'person' : 'people'}`;
+    $('#togetherText').textContent = s.self
+      ? (others ? `You + ${others} other${others === 1 ? '' : 's'} focusing` : 'You’re focusing')
+      : `${people(others)} focusing now`;
+    const list = $('#togetherList'), anon = others - s.names.length;
+    list.replaceChildren(Object.assign(document.createElement('b'), { textContent: 'Focusing now' }));
+    if (s.self) list.append(Object.assign(document.createElement('div'), { textContent: settings.profile ? `${settings.profile.name} (you)` : 'You' }));
+    for (const n of s.names) list.append(Object.assign(document.createElement('div'), { textContent: n }));
+    if (anon > 0) list.append(Object.assign(document.createElement('div'), { className: 'anon', textContent: `${s.names.length || s.self ? '+ ' : ''}${people(anon)} without a name` }));
+  }
+  $('#together').addEventListener('click', () => {
+    const list = $('#togetherList'); list.hidden = !list.hidden;
+    $('#together').setAttribute('aria-expanded', String(!list.hidden));
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('.together-wrap')) $('#togetherList').hidden = true; });
+  setInterval(() => { if (!document.hidden || timer.running || sw.running) beat(); }, 25000);
+  window.addEventListener('pagehide', () => { // closing the tab ends your focus for everyone else straight away
+    if (timer.running || sw.running) navigator.sendBeacon(API + '/presence', JSON.stringify({ client: clientId, focusing: false }));
+  });
+  setInterval(() => queueSync(), 5 * 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { queueSync(); beat(); } });
+
   applyVisibility();
+  queueSync();
   tick();
   renderPlace();
   loadWeather();
