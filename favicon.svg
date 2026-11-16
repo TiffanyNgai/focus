@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2152"/>
+      <stop offset=".45" stop-color="#5a4a8c"/>
+      <stop offset=".75" stop-color="#ee9a6c"/>
+      <stop offset="1" stop-color="#ffd58a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="32" cy="39" r="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff3d6" stop-opacity=".75"/>
+      <stop offset="1" stop-color="#fff3d6" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile"><rect width="64" height="64" rx="15"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="64" height="64" fill="url(#sky)"/>
+    <circle cx="32" cy="39" r="22" fill="url(#glow)"/>
+    <circle cx="32" cy="39" r="10.5" fill="#fff6e0"/>
+    <path d="M0 64V47h8v-7h7v11h6V33h9v15h5v-9h8v7h5V37h8v13h8v14z" fill="#0f1430"/>
+    <g fill="#ffd58a">
+      <rect x="23.500" y="37" width="2" height="2.500" rx=".5"/>
+      <rect x="23.500" y="43" width="2" height="2.500" rx=".5"/>
+      <rect x="50.500" y="41" width="2" height="2.500" rx=".5"/>
+      <rect x="10.500" y="44" width="2" height="2.500" rx=".5"/>
+      <rect x="38" y="43" width="2" height="2.500" rx=".5"/>
+    </g>
+  </g>
+</svg>
