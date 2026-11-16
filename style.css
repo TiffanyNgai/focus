@@ -84,6 +84,29 @@ button { cursor: pointer; }
 }
 .chip:hover { background: var(--glass); color: var(--ink); }
 
+/* ---------- toast ---------- */
+.toast {
+  position: fixed;
+  top: max(18px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 3;
+  max-width: calc(100vw - 32px);
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  font-size: .85rem;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  transform: translate(-50%, -8px);
+  transition: opacity .35s, transform .35s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 520px) { .toast { top: 56px; } }
+
 /* ---------- centre stage ---------- */
 .stage {
   position: fixed;
@@ -100,14 +123,15 @@ button { cursor: pointer; }
 
 .clock { text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, .35), 0 4px 18px rgba(0, 0, 0, .4), 0 0 60px rgba(0, 0, 0, .35); }
 .time {
-  font-family: -apple-system, "SF Pro Display", "SF Pro", "Helvetica Neue", "Inter", "Segoe UI", system-ui, sans-serif;
-  font-size: min(16vw, 19vh, 9rem);
-  font-weight: 650;
-  letter-spacing: -.025em;
+  font-family: "Bodoni Moda", "Bodoni 72", "DM Serif Display", "Didot", ui-serif, Georgia, serif;
+  font-size: min(17vw, 20vh, 9.5rem);
+  font-weight: 600;
+  letter-spacing: 0;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.dg { display: inline-block; width: .6em; text-align: center; }
 .time small { font-size: .28em; font-weight: 600; margin-left: .35em; letter-spacing: .06em; color: var(--ink-soft); }
 .date {
   margin-top: .7em;
@@ -146,7 +170,8 @@ button { cursor: pointer; }
 }
 .readout {
   margin: 6px 0 10px;
-  font-size: 2.6rem;
+  font-family: "Bodoni Moda", "Bodoni 72", "DM Serif Display", "Didot", ui-serif, Georgia, serif;
+  font-size: 2.7rem;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.01em;

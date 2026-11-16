@@ -7,7 +7,7 @@
 
   const settings = Object.assign({
     showClock: true, showDate: true, showTimer: true, showStopwatch: true,
-    hour12: false, seconds: true, unit: 'c', timerMin: 30, view: 'city', motion: true,
+    hour12: false, seconds: true, unit: 'c', alarm: 'gentle', timerMin: 30, view: 'city', motion: true,
     city: { name: 'Waterloo', region: 'Ontario, Canada', lat: 43.4643, lon: -80.5204 },
   }, store.get('focus.settings', {}));
   if (!settings.v) { if (settings.timerMin === 25) settings.timerMin = 30; settings.v = 2; } // presets changed to 15 / 30 / 60
@@ -45,6 +45,7 @@
     $('#optHour').value = settings.hour12 ? '12' : '24';
     $('#optUnit').value = settings.unit;
     $('#optView').value = settings.view;
+    $('#optAlarm').value = settings.alarm;
     $('#optMotion').checked = settings.motion;
   }
   function bindToggle(sel, key) {
@@ -58,6 +59,7 @@
   $('#optHour').addEventListener('change', e => { settings.hour12 = e.target.value === '12'; saveSettings(); tick(); });
   $('#optView').addEventListener('change', e => { settings.view = e.target.value; saveSettings(); pushScene(); });
   $('#optMotion').addEventListener('change', e => { settings.motion = e.target.checked; saveSettings(); pushScene(); });
+  $('#optAlarm').addEventListener('change', e => { settings.alarm = e.target.value; saveSettings(); playAlarm(); });
   function pushScene() { Scene.set({ view: settings.view, motion: settings.motion }); }
   $('#optUnit').addEventListener('change', e => { settings.unit = e.target.value; saveSettings(); renderPlace(); });
 
@@ -88,7 +90,12 @@
     tick();
   }
 
-  $('#timerToggle').addEventListener('click', () => { timer.running ? timer.pause() : timer.start(); tick(); });
+  $('#timerToggle').addEventListener('click', () => {
+    if (timer.running) timer.pause();
+    else { audioCtx(); timer.start(); toast(ALARM_TEXT[settings.alarm]); }
+    tick();
+  });
+  $('#toast').addEventListener('click', () => { $('#toast').classList.remove('show'); openSettings(); });
   $('#timerStop').addEventListener('click', () => finish(timer, 'timer', timerMs()));
   $('#swToggle').addEventListener('click', () => { sw.running ? sw.pause() : sw.start(); tick(); });
   $('#swStop').addEventListener('click', () => finish(sw, 'stopwatch'));
@@ -101,16 +108,53 @@
   $('#timerPresets').addEventListener('click', e => { if (e.target.dataset.min) { $('#timerCustom').value = ''; setTimerMin(e.target.dataset.min); } });
   $('#timerCustom').addEventListener('input', e => setTimerMin(e.target.value));
 
-  function chime() {
+  // ---------- alarm ----------
+  let audio = null;
+  function audioCtx() { // created on a click so the browser lets it play later, when the timer runs out
     try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      [523.25, 659.25, 783.99].forEach((f, i) => {
-        const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + i * .22;
-        o.type = 'sine'; o.frequency.value = f;
-        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.18, t + .03); g.gain.exponentialRampToValueAtTime(.001, t + 1.2);
-        o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 1.3);
-      });
-    } catch { /* no audio */ }
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+    } catch { audio = null; }
+    return audio;
+  }
+  function tone(ac, type, freq, at, len, peak, soft) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(peak, at + (soft ? .03 : .005));
+    if (soft) g.gain.exponentialRampToValueAtTime(.001, at + len);
+    else { g.gain.setValueAtTime(peak, at + len - .01); g.gain.linearRampToValueAtTime(0, at + len); }
+    o.connect(g).connect(ac.destination); o.start(at); o.stop(at + len + .05);
+  }
+  function playAlarm(kind = settings.alarm) {
+    const ac = kind === 'off' ? null : audioCtx();
+    if (!ac) return;
+    const t = ac.currentTime + .05;
+    if (kind === 'abrupt') { // classic alarm clock: four quick beeps, repeated
+      for (let set = 0; set < 4; set++) for (let i = 0; i < 4; i++) tone(ac, 'square', 1960, t + set * 1 + i * .14, .08, .16, false);
+    } else { // two soft rising chimes
+      for (let rep = 0; rep < 2; rep++) [523.25, 659.25, 783.99].forEach((f, i) => tone(ac, 'sine', f, t + rep * 1.6 + i * .24, 1.4, .2, true));
+    }
+  }
+
+  const ALARM_TEXT = { gentle: 'Alarm on · gentle chime', abrupt: 'Alarm on · abrupt beeps', off: 'Alarm off · the timer will end silently' };
+  let toastTimer;
+  function toast(text) {
+    const t = $('#toast');
+    t.textContent = text; t.hidden = false;
+    requestAnimationFrame(() => t.classList.add('show'));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.classList.remove('show'); setTimeout(() => { t.hidden = true; }, 400); }, 4500);
+  }
+
+  // fixed-width digits so the serif numerals don't jitter as they change
+  function setDigits(node, text, suffix) {
+    const key = text + '|' + (suffix || '');
+    if (node.dataset.t === key) return;
+    node.dataset.t = key;
+    node.replaceChildren(...[...text].map(ch => /\d/.test(ch)
+      ? Object.assign(document.createElement('span'), { className: 'dg', textContent: ch }) : ch));
+    if (suffix) node.append(Object.assign(document.createElement('small'), { textContent: suffix }));
   }
 
   // ---------- tick ----------
@@ -120,18 +164,13 @@
       let h = now.getHours(), suffix = '';
       if (settings.hour12) { suffix = h < 12 ? 'AM' : 'PM'; h = h % 12 || 12; }
       const text = (settings.hour12 ? h : pad(h)) + ':' + pad(now.getMinutes()) + (settings.seconds ? ':' + pad(now.getSeconds()) : '');
-      const el = $('#time');
-      if (el.dataset.t !== text + suffix) {
-        el.dataset.t = text + suffix;
-        el.textContent = text;
-        if (suffix) { const s = document.createElement('small'); s.textContent = suffix; el.append(s); }
-      }
+      setDigits($('#time'), text, suffix);
       $('#date').textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     }
 
-    if (timer.running && timer.elapsed() >= timerMs()) { chime(); finish(timer, 'timer', timerMs()); return; }
+    if (timer.running && timer.elapsed() >= timerMs()) { playAlarm(); finish(timer, 'timer', timerMs()); return; }
     const left = timerMs() - timer.elapsed();
-    $('#timerDisplay').textContent = fmtClock(Math.ceil(left / 1000) * 1000);
+    setDigits($('#timerDisplay'), fmtClock(Math.ceil(left / 1000) * 1000));
     $('#timerToggle').textContent = timer.running ? 'Pause' : timer.started ? 'Resume' : 'Start';
     $('#timerStop').hidden = !timer.started;
     $('#timerPresets').hidden = timer.started;
@@ -143,11 +182,11 @@
     if (!preset && document.activeElement !== custom) custom.value = settings.timerMin;
     custom.placeholder = '…';
 
-    $('#swDisplay').textContent = fmtClock(sw.elapsed(), true);
+    setDigits($('#swDisplay'), fmtClock(sw.elapsed(), true));
     $('#swToggle').textContent = sw.running ? 'Pause' : sw.started ? 'Resume' : 'Start';
     $('#swStop').hidden = !sw.started;
 
-    document.title = timer.running ? `${fmtClock(left)} · Focus` : sw.running ? `${fmtClock(sw.elapsed(), true)} · Focus` : 'Focus';
+    document.title = timer.running ? `${fmtClock(Math.ceil(left / 1000) * 1000)} · Focus` : sw.running ? `${fmtClock(sw.elapsed(), true)} · Focus` : 'Focus';
   }
   setInterval(tick, 250);
 
