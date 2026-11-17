@@ -1,8 +1,18 @@
-// Focus API: profiles (username + private sync code), synced focus sessions, and "who is focusing now".
+// Focus API: profiles (username + private sync code), synced focus sessions, the lounge (who is focusing,
+// their character and status), and cheers between people.
 
 const FRESH_MS = 150_000;       // someone counts as focusing if their browser pinged in the last 2.5 minutes (background tabs ping slowly)
 const MAX_NAMES = 40;
 const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.-]{1,19}$/u; // 2-20 characters
+const CHARACTERS = ['fox', 'bear', 'cat', 'owl', 'frog', 'panda', 'penguin', 'raccoon',
+  'shiba', 'rabbit', 'avocado', 'mushroom', 'cactus', 'coffee', 'robot', 'astronaut'];
+const CHEERS = ['hello', 'luck', 'gotThis']; // the only things anyone can send: no free text
+const CHEER_GAP_MS = 10_000;    // same sender to same person: at most one cheer every 10 seconds
+const SEND_WINDOW_MS = 600_000;  // one sender: at most SEND_MAX cheers in 10 minutes, across everyone
+const SEND_MAX = 30;
+const INBOX_MAX = 30;           // unread cheers waiting for one person
+const INBOX_AGE_MS = 864e5;     // cheers that wait longer than a day are dropped instead of popping up late
+const KEEP_READ_MS = 7 * 864e5; // delivered cheers are removed after a week
 
 const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -18,10 +28,19 @@ function newCode() { // e.g. K7QM-2XHD-9RTB-W4NP (80 bits)
   return [...bytes].map((b, i) => (i && i % 4 === 0 ? '-' : '') + alphabet[b % 32]).join('');
 }
 
+const newId = () => crypto.randomUUID().replace(/-/g, '');
+
+// Short status line typed when a session starts: one line, 60 characters at most.
+function cleanStatus(v) {
+  const s = String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return s || null;
+}
+
 async function auth(request, env) {
   const [name, code] = (request.headers.get('authorization') || '').replace(/^Bearer /, '').split('|');
   if (!name || !code) return null;
-  const row = await env.DB.prepare('SELECT key, name, code_hash FROM profiles WHERE key = ?').bind(decodeURIComponent(name).toLowerCase()).first();
+  const row = await env.DB.prepare('SELECT key, name, code_hash, character FROM profiles WHERE key = ?')
+    .bind(decodeURIComponent(name).toLowerCase()).first();
   if (!row || row.code_hash !== await sha256(code.trim().toUpperCase())) return null;
   return row;
 }
@@ -37,32 +56,60 @@ function cleanSession(s) {
   };
 }
 
-async function presenceSnapshot(env, selfClient) {
+async function presenceSnapshot(env, selfClient, viewer) {
   const since = Date.now() - FRESH_MS;
-  const { results } = await env.DB.prepare('SELECT client, name FROM presence WHERE last_seen > ? ORDER BY last_seen DESC LIMIT 500').bind(since).all();
+  const { results } = await env.DB.prepare(
+    'SELECT client, name, character, status, COALESCE(started, last_seen) AS started FROM presence WHERE last_seen > ? ORDER BY started ASC LIMIT 500'
+  ).bind(since).all();
+
+  // one seat per person: if someone focuses from two browsers, keep the row from this browser
+  const byName = new Map();
+  for (const r of results) {
+    if (!r.name) continue;
+    const k = r.name.toLowerCase(), prev = byName.get(k);
+    if (!prev || r.client === selfClient) byName.set(k, r);
+  }
+  const people = [...byName.values()]
+    .map(r => ({ name: r.name, character: r.character || null, status: viewer ? r.status || null : null, started: r.started, me: r.client === selfClient }))
+    .sort((a, b) => a.started - b.started)
+    .slice(0, MAX_NAMES);
   const names = [...new Set(results.filter(r => r.name && r.client !== selfClient).map(r => r.name))].slice(0, MAX_NAMES);
-  return { count: results.length, others: results.filter(r => r.client !== selfClient).length, names };
+
+  return {
+    count: results.length,
+    others: results.filter(r => r.client !== selfClient).length,
+    names,
+    people,                                  // named people focusing now, in seating order (first come, first seated)
+    guests: results.filter(r => !r.name).length, // focusing without a profile: shown as anonymous seats
+  };
 }
 
 async function handle(request, env, ctx) {
   const url = new URL(request.url), path = url.pathname, method = request.method;
-  const body = method === 'POST' ? await request.json().catch(() => ({})) : {};
+  const body = ['POST', 'PATCH'].includes(method) ? await request.json().catch(() => ({})) : {};
 
   // ----- who is focusing -----
-  if (path === '/presence' && method === 'GET') return json(await presenceSnapshot(env, url.searchParams.get('client')));
+  // statuses are only shared with people who have a profile themselves
+  if (path === '/presence' && method === 'GET') return json(await presenceSnapshot(env, url.searchParams.get('client'), await auth(request, env)));
 
   if (path === '/presence' && method === 'POST') {
     const client = String(body.client || '');
     if (!/^[\w-]{8,64}$/.test(client)) return json({ error: 'bad client' }, 400);
+    const who = await auth(request, env); // a name, character and status are only shown for a real profile
     if (body.focusing) {
-      const who = await auth(request, env); // a name is only shown for a real profile
-      await env.DB.prepare('INSERT INTO presence (client, name, last_seen) VALUES (?, ?, ?) ON CONFLICT(client) DO UPDATE SET name = excluded.name, last_seen = excluded.last_seen')
-        .bind(client, who ? who.name : null, Date.now()).run();
+      const now = Date.now();
+      await env.DB.prepare(`INSERT INTO presence (client, name, character, status, started, last_seen) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(client) DO UPDATE SET
+            name = excluded.name, character = excluded.character, status = excluded.status,
+            started = CASE WHEN presence.last_seen < ? THEN excluded.started ELSE presence.started END,
+            last_seen = excluded.last_seen`)
+        .bind(client, who ? who.name : null, who ? who.character || null : null, who ? cleanStatus(body.status) : null,
+          now, now, now - FRESH_MS).run();
     } else {
       await env.DB.prepare('DELETE FROM presence WHERE client = ?').bind(client).run();
     }
     if (Math.random() < .02) ctx.waitUntil(env.DB.prepare('DELETE FROM presence WHERE last_seen < ?').bind(Date.now() - 10 * FRESH_MS).run());
-    return json(await presenceSnapshot(env, client));
+    return json(await presenceSnapshot(env, client, who));
   }
 
   // ----- profiles -----
@@ -73,17 +120,25 @@ async function handle(request, env, ctx) {
     try {
       await env.DB.prepare('INSERT INTO profiles (key, name, code_hash, created) VALUES (?, ?, ?, ?)').bind(name.toLowerCase(), name, await sha256(code), Date.now()).run();
     } catch { return json({ error: 'That username is taken.' }, 409); }
-    return json({ name, code });
+    return json({ name, code, character: null });
   }
 
   const who = await auth(request, env);
   if (!who) return json({ error: 'Username or sync code is not right.' }, 401);
 
-  if (path === '/profile' && method === 'GET') return json({ name: who.name });
+  if (path === '/profile' && method === 'GET') return json({ name: who.name, character: who.character || null });
+
+  if (path === '/profile' && method === 'PATCH') { // pick the character shown in the lounge
+    if (!CHARACTERS.includes(body.character)) return json({ error: 'Pick one of the characters.' }, 400);
+    await env.DB.prepare('UPDATE profiles SET character = ? WHERE key = ?').bind(body.character, who.key).run();
+    return json({ name: who.name, character: body.character });
+  }
 
   if (path === '/profile' && method === 'DELETE') {
     await env.DB.batch([
       env.DB.prepare('DELETE FROM sessions WHERE profile = ?').bind(who.key),
+      env.DB.prepare('DELETE FROM messages WHERE to_key = ? OR from_key = ?').bind(who.key, who.key),
+      env.DB.prepare('DELETE FROM presence WHERE name = ? COLLATE NOCASE').bind(who.name),
       env.DB.prepare('DELETE FROM profiles WHERE key = ?').bind(who.key),
     ]);
     return json({ ok: true });
@@ -110,6 +165,45 @@ async function handle(request, env, ctx) {
     return json({ ok: true });
   }
 
+  // ----- cheers: hello / good luck / you got this, delivered to the other person's inbox -----
+  if (path === '/messages' && method === 'POST') {
+    if (!CHEERS.includes(body.kind)) return json({ error: 'Choose hello, good luck or you got this.' }, 400);
+    const to = String(body.to || '').trim(), key = to.toLowerCase();
+    if (!key || key === who.key) return json({ error: 'Pick someone else in the lounge.' }, 400);
+    // only people sitting in the lounge right now can be cheered, so nobody gets cheers out of the blue
+    const target = await env.DB.prepare('SELECT name FROM presence WHERE name = ? COLLATE NOCASE AND last_seen > ? LIMIT 1')
+      .bind(to, Date.now() - FRESH_MS).first();
+    if (!target) return json({ error: 'They are not in the lounge right now.' }, 404);
+    const sent = await env.DB.prepare('SELECT COUNT(*) AS n FROM messages WHERE from_key = ? AND created > ?').bind(who.key, Date.now() - SEND_WINDOW_MS).first();
+    if (sent.n >= SEND_MAX) return json({ error: 'That is a lot of cheers. Take a short break and try again.' }, 429);
+    const last = await env.DB.prepare('SELECT MAX(created) AS t FROM messages WHERE from_key = ? AND to_key = ?').bind(who.key, key).first();
+    if (last && last.t && Date.now() - last.t < CHEER_GAP_MS) return json({ error: 'Give them a few seconds before the next one.' }, 429);
+    const unread = await env.DB.prepare('SELECT COUNT(*) AS n FROM messages WHERE to_key = ? AND delivered = 0').bind(key).first();
+    if (unread.n >= INBOX_MAX) return json({ error: 'Their inbox is full for now.' }, 429);
+
+    const at = Date.now();
+    await env.DB.prepare('INSERT INTO messages (id, to_key, from_key, from_name, from_character, kind, created) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(newId(), key, who.key, who.name, who.character || null, body.kind, at).run();
+    if (Math.random() < .02) ctx.waitUntil(env.DB.prepare('DELETE FROM messages WHERE (delivered = 1 AND created < ?) OR created < ?').bind(at - INBOX_AGE_MS, at - KEEP_READ_MS).run());
+    return json({ to: target.name, kind: body.kind, at });
+  }
+
+  if (path === '/inbox' && method === 'GET') { // cheers not yet shown to this person
+    const { results } = await env.DB.prepare(
+      'SELECT id, from_name AS "from", from_character AS character, kind, created AS at FROM messages WHERE to_key = ? AND delivered = 0 AND created > ? ORDER BY created LIMIT 50'
+    ).bind(who.key, Date.now() - INBOX_AGE_MS).all();
+    return json({ messages: results });
+  }
+
+  if (path === '/inbox/ack' && method === 'POST') { // mark cheers as shown
+    const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).filter(id => /^[\w-]{1,40}$/.test(id)).slice(0, 50);
+    if (ids.length) {
+      const stmt = env.DB.prepare('UPDATE messages SET delivered = 1 WHERE to_key = ? AND id = ?');
+      await env.DB.batch(ids.map(id => stmt.bind(who.key, id)));
+    }
+    return json({ ok: true });
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -119,7 +213,7 @@ export default {
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').includes(origin);
     const cors = allowed ? {
       'access-control-allow-origin': origin,
-      'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
+      'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
       'access-control-allow-headers': 'authorization,content-type',
       'access-control-max-age': '86400',
       vary: 'origin',

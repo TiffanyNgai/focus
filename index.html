@@ -19,6 +19,10 @@
 
 <header class="top">
   <button id="place" class="chip" title="Change city">Waterloo</button>
+  <div id="viewSeg" class="seg top-seg" role="group" aria-label="Background">
+    <button data-view="city" class="on" aria-pressed="true" title="City photos (T)">City</button>
+    <button data-view="nature" aria-pressed="false" title="Landscape photos (T)">Landscape</button>
+  </div>
   <span class="grow"></span>
   <div class="together-wrap">
     <button id="together" class="chip" hidden aria-expanded="false"><i class="pulse"></i><span id="togetherText"></span></button>
@@ -27,6 +31,7 @@
 </header>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="notices" class="notices" aria-live="polite"></div>
 
 <main class="stage">
   <section id="clock" class="clock">
@@ -38,6 +43,7 @@
     <section id="timer" class="card" aria-label="Timer">
       <div class="card-label">Timer</div>
       <div id="timerDisplay" class="readout">30:00</div>
+      <p id="timerStatus" class="status" hidden></p>
       <div id="timerPresets" class="presets">
         <button data-min="15">15</button>
         <button data-min="30">30</button>
@@ -53,6 +59,7 @@
     <section id="stopwatch" class="card" aria-label="Stopwatch">
       <div class="card-label">Stopwatch</div>
       <div id="swDisplay" class="readout">00:00:00</div>
+      <p id="swStatus" class="status" hidden></p>
       <div class="controls">
         <button id="swToggle" class="btn primary">Start</button>
         <button id="swStop" class="btn" hidden>Stop</button>
@@ -72,10 +79,13 @@
     <svg viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4M9.5 3h5M12 3v3M18.5 7l1.200-1.200"/></svg>
   </button>
   <span class="sep"></span>
+  <button id="openLounge" title="Lounge" aria-label="Open lounge">
+    <svg viewBox="0 0 24 24"><path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16M9 3.5c-1 1.2 1 2 0 3.5M12.5 3.5c-1 1.2 1 2 0 3.5"/></svg>
+  </button>
   <button id="openCal" title="Focus calendar" aria-label="Open focus calendar">
     <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
   </button>
-  <button id="openSet" title="Settings" aria-label="Open settings">
+  <button id="openSet" title="Settings (S)" aria-label="Open settings">
     <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
   </button>
 </nav>
@@ -92,6 +102,47 @@
       <button type="submit" class="btn primary">Save</button>
     </div>
   </form>
+</dialog>
+
+<!-- Session status, asked when a timer or stopwatch starts -->
+<dialog id="statusDialog" class="sheet small">
+  <form id="statusForm" method="dialog">
+    <h2>What are you working on?</h2>
+    <p class="muted">Optional. It shows next to your character in the lounge. Press Enter to start without one.</p>
+    <input id="statusInput" type="text" placeholder="e.g. Chapter 3 draft" maxlength="60" autocomplete="off">
+    <div class="row end">
+      <button type="button" id="statusCancel" class="btn">Cancel</button>
+      <button type="submit" class="btn primary">Start</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Lounge: people focusing right now, seated around one table -->
+<dialog id="loungeDialog" class="sheet lounge">
+  <div class="sheet-head">
+    <div class="grow">
+      <h2>Lounge</h2>
+      <p id="loungeCount" class="muted"></p>
+    </div>
+    <button class="icon close" data-close aria-label="Close">×</button>
+  </div>
+  <div id="loungeMine" class="mine" hidden>
+    <span id="mineArt" class="mine-art"></span>
+    <span id="mineName" class="grow"></span>
+    <button id="mineChange" class="mini" type="button" aria-expanded="false" aria-controls="loungePick">Change</button>
+  </div>
+  <div id="loungePick" class="chars" role="group" aria-label="Your character" hidden></div>
+  <div id="loungeScene" class="lounge-scene"></div>
+  <div id="loungeQueue" class="queue" hidden></div>
+  <div id="cheerBar" class="cheer" hidden>
+    <span id="cheerTo"></span>
+    <button class="mini" data-cheer="hello">Hello!!</button>
+    <button class="mini" data-cheer="luck">Good luck to your work</button>
+    <button class="mini" data-cheer="gotThis">You got this!!</button>
+    <button class="mini" id="cheerCancel" type="button">Cancel</button>
+  </div>
+  <p id="loungeNote" class="muted"></p>
+  <ul id="loungeLog" class="sent"></ul>
 </dialog>
 
 <!-- Calendar -->
@@ -132,24 +183,16 @@
   </div>
 </dialog>
 
-<!-- Settings -->
+<!-- Settings: grouped by what they change, with the keyboard key where one exists -->
 <dialog id="setDialog" class="sheet small">
   <div class="sheet-head">
     <h2 class="grow">Settings</h2>
     <button class="icon close" data-close aria-label="Close">×</button>
   </div>
 
-  <h3>City</h3>
-  <form id="cityForm" class="row">
-    <input id="cityInput" type="text" placeholder="Search a city…" autocomplete="off">
-    <button class="btn" type="submit">Search</button>
-  </form>
-  <ul id="cityResults" class="results"></ul>
-  <p id="cityCurrent" class="muted"></p>
-
   <h3>Profile</h3>
   <div id="profileOut">
-    <p class="muted">Pick a username to keep your log across devices and show your name to others while you focus. There is no password: you get a private sync code instead.</p>
+    <p class="muted">Pick a username to keep your log across devices, sit in the lounge and send cheers. There is no password: you get a private sync code instead.</p>
     <form id="profileForm" class="row">
       <input id="profName" type="text" placeholder="Username" maxlength="20" autocomplete="off">
       <button class="btn" type="submit">Create</button>
@@ -165,55 +208,80 @@
   </div>
   <div id="profileIn" hidden>
     <p class="who">Signed in as <b id="profWho"></b></p>
-    <div class="opt"><span>Sync code</span><span class="code-row"><code id="profCode"></code><button id="profShow" class="mini" type="button">Show</button></span></div>
-    <p class="muted">Enter this username and code on another device to link it. Anyone who has the code can see and change your log, so keep it private.</p>
-    <p id="syncState" class="muted"></p>
-    <div class="row end"><button id="profSignOut" class="btn" type="button">Sign out on this device</button></div>
+    <div class="opt-block">
+      <span class="opt-text">Your character<small>How others see you in the lounge</small></span>
+      <div id="charPick" class="chars" role="group" aria-label="Your character"></div>
+    </div>
   </div>
   <p id="profMsg" class="muted" role="status"></p>
 
-  <h3>Background</h3>
-  <label class="opt"><span>View</span>
-    <select id="optView">
-      <option value="city">City</option>
-      <option value="nature">Landscape</option>
-    </select>
-  </label>
-  <label class="opt"><span>Moving video when available</span><input id="optMotion" type="checkbox"></label>
-
-  <h3>Clock</h3>
-  <label class="opt"><span>Time format</span>
-    <select id="optHour">
-      <option value="24">24-hour</option>
-      <option value="12">12-hour</option>
-    </select>
-  </label>
-  <label class="opt"><span>Show seconds</span><input id="optSeconds" type="checkbox"></label>
-  <label class="opt"><span>Show date</span><input id="optDate" type="checkbox"></label>
-
-  <h3>Timer alarm</h3>
-  <label class="opt"><span>Sound when the timer ends</span>
+  <h3>Focus sessions</h3>
+  <label class="opt"><span class="opt-text">Ask for a status when starting<small>An optional line that shows next to your character in the lounge</small></span>
+    <input id="optAsk" type="checkbox"></label>
+  <label class="opt"><span class="opt-text">Hyperfocus<small>Holds lounge cheers while a timer or stopwatch runs. They arrive when you switch this off or finish the session.</small></span>
+    <span class="opt-end"><kbd>H</kbd><input id="optHyper" type="checkbox"></span></label>
+  <label class="opt"><span class="opt-text">Sound effects<small>Timer alarm and other chimes</small></span>
+    <span class="opt-end"><kbd>M</kbd><input id="optSound" type="checkbox"></span></label>
+  <label class="opt"><span>Timer alarm sound</span>
     <select id="optAlarm">
       <option value="gentle">Gentle chime</option>
       <option value="abrupt">Abrupt beeps</option>
-      <option value="off">Off</option>
     </select>
   </label>
 
-  <h3>Show on screen</h3>
-  <label class="opt"><span>Clock</span><input id="optClock" type="checkbox"></label>
-  <label class="opt"><span>Timer</span><input id="optTimer" type="checkbox"></label>
-  <label class="opt"><span>Stopwatch</span><input id="optStopwatch" type="checkbox"></label>
+  <h3>Background</h3>
+  <label class="opt"><span class="opt-text">Landscape view<small>Nature photos and footage instead of cities</small></span>
+    <span class="opt-end"><kbd>T</kbd><input id="optLandscape" type="checkbox"></span></label>
+  <label class="opt"><span class="opt-text">Moving video<small>Plays footage when it matches the time and weather</small></span>
+    <span class="opt-end"><kbd>V</kbd><input id="optMotion" type="checkbox"></span></label>
+
+  <h3>City and weather</h3>
+  <form id="cityForm" class="row">
+    <input id="cityInput" type="text" placeholder="Search a city…" autocomplete="off">
+    <button class="btn" type="submit">Search</button>
+  </form>
+  <ul id="cityResults" class="results"></ul>
+  <p id="cityCurrent" class="muted"></p>
   <label class="opt"><span>Temperature</span>
     <select id="optUnit">
       <option value="c">°C</option>
       <option value="f">°F</option>
     </select>
   </label>
+
+  <h3>On screen</h3>
+  <label class="opt"><span>Clock</span><input id="optClock" type="checkbox"></label>
+  <label class="opt"><span>Date</span><input id="optDate" type="checkbox"></label>
+  <label class="opt"><span>Seconds</span><input id="optSeconds" type="checkbox"></label>
+  <label class="opt"><span>Time format</span>
+    <select id="optHour">
+      <option value="24">24-hour</option>
+      <option value="12">12-hour</option>
+    </select>
+  </label>
+  <label class="opt"><span>Timer</span><input id="optTimer" type="checkbox"></label>
+  <label class="opt"><span>Stopwatch</span><input id="optStopwatch" type="checkbox"></label>
+
+  <h3>Keyboard shortcuts</h3>
+  <dl class="keys">
+    <div><dt><kbd>S</kbd></dt><dd>Open settings</dd></div>
+    <div><dt><kbd>T</kbd></dt><dd>Switch between city and landscape view</dd></div>
+    <div><dt><kbd>M</kbd></dt><dd>Turn sound effects on or off</dd></div>
+    <div><dt><kbd>V</kbd></dt><dd>Turn moving video on or off</dd></div>
+    <div><dt><kbd>H</kbd></dt><dd>Turn hyperfocus on or off</dd></div>
+  </dl>
+  <div id="deviceBox" hidden>
+    <h3>Sync and this device</h3>
+    <div class="opt"><span>Sync code</span><span class="code-row"><code id="profCode"></code><button id="profShow" class="mini" type="button">Show</button></span></div>
+    <p class="muted">Enter your username and this code on another device to link it. Anyone who has the code can see and change your log, so keep it private.</p>
+    <p id="syncState" class="muted"></p>
+    <div class="row end"><button id="profSignOut" class="btn" type="button">Sign out on this device</button></div>
+  </div>
   <p class="muted credit">Photos from <a href="https://unsplash.com" target="_blank" rel="noopener">Unsplash</a> · video from <a href="https://mixkit.co" target="_blank" rel="noopener">Mixkit</a> · weather from Open-Meteo</p>
 </dialog>
 
 <script src="scene.js"></script>
+<script src="avatars.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

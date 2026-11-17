@@ -8,9 +8,11 @@
   const settings = Object.assign({
     showClock: true, showDate: true, showTimer: true, showStopwatch: true,
     hour12: false, seconds: true, unit: 'c', alarm: 'gentle', timerMin: 30, view: 'city', motion: true,
+    sound: true, hyperfocus: false, askStatus: true,
     city: { name: 'Waterloo', region: 'Ontario, Canada', lat: 43.4643, lon: -80.5204 },
   }, store.get('focus.settings', {}));
   if (!settings.v) { if (settings.timerMin === 25) settings.timerMin = 30; settings.v = 2; } // presets changed to 15 / 30 / 60
+  if (settings.alarm === 'off') { settings.alarm = 'gentle'; settings.sound = false; } // "off" became the sound switch
   const saveSettings = () => store.set('focus.settings', settings);
 
   let sessions = store.get('focus.sessions', []);
@@ -44,9 +46,16 @@
     $('#optSeconds').checked = settings.seconds;
     $('#optHour').value = settings.hour12 ? '12' : '24';
     $('#optUnit').value = settings.unit;
-    $('#optView').value = settings.view;
+    $('#optLandscape').checked = settings.view === 'nature';
     $('#optAlarm').value = settings.alarm;
     $('#optMotion').checked = settings.motion;
+    $('#optSound').checked = settings.sound;
+    $('#optHyper').checked = settings.hyperfocus;
+    $('#optAsk').checked = settings.askStatus;
+    document.querySelectorAll('#viewSeg button').forEach(b => {
+      const on = b.dataset.view === settings.view;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+    });
   }
   function bindToggle(sel, key) {
     $(sel).addEventListener(sel.startsWith('#opt') ? 'change' : 'click', () => {
@@ -57,30 +66,57 @@
   bindToggle('#optClock', 'showClock'); bindToggle('#optTimer', 'showTimer'); bindToggle('#optStopwatch', 'showStopwatch');
   bindToggle('#optDate', 'showDate'); bindToggle('#optSeconds', 'seconds');
   $('#optHour').addEventListener('change', e => { settings.hour12 = e.target.value === '12'; saveSettings(); tick(); });
-  $('#optView').addEventListener('change', e => { settings.view = e.target.value; saveSettings(); pushScene(); });
-  $('#optMotion').addEventListener('change', e => { settings.motion = e.target.checked; saveSettings(); pushScene(); });
+  $('#optLandscape').addEventListener('change', e => setView(e.target.checked ? 'nature' : 'city'));
+  $('#optMotion').addEventListener('change', e => setMotion(e.target.checked));
+  $('#optSound').addEventListener('change', e => setSound(e.target.checked));
+  $('#optHyper').addEventListener('change', e => setHyper(e.target.checked));
+  $('#optAsk').addEventListener('change', e => { settings.askStatus = e.target.checked; saveSettings(); });
   $('#optAlarm').addEventListener('change', e => { settings.alarm = e.target.value; saveSettings(); playAlarm(); });
+  $('#viewSeg').addEventListener('click', e => { if (e.target.dataset.view) setView(e.target.dataset.view); });
   function pushScene() { Scene.set({ view: settings.view, motion: settings.motion }); }
+
+  // one place per setting, so the settings panel, the top toggle and the keys all stay in step
+  function setView(v) { settings.view = v; saveSettings(); applyVisibility(); pushScene(); toast(v === 'nature' ? 'Landscape view' : 'City view'); }
+  function setMotion(on) { settings.motion = on; saveSettings(); applyVisibility(); pushScene(); toast(on ? 'Moving video on' : 'Moving video off'); }
+  function setSound(on) { settings.sound = on; saveSettings(); applyVisibility(); toast(on ? 'Sound effects on' : 'Sound effects off'); }
+  function setHyper(on) {
+    settings.hyperfocus = on; saveSettings(); applyVisibility();
+    toast(on ? 'Hyperfocus on · lounge cheers wait until your session ends' : 'Hyperfocus off');
+    checkInbox(); // switching it off may release cheers that were held
+  }
   $('#optUnit').addEventListener('change', e => { settings.unit = e.target.value; saveSettings(); renderPlace(); });
 
   // ---------- runs (timer + stopwatch share this) ----------
   function makeRun(key) {
-    const s = store.get(key, { acc: 0, at: null, first: null, last: null });
+    const s = store.get(key, { acc: 0, at: null, first: null, last: null, status: null });
     const save = () => store.set(key, s);
     return {
       get running() { return s.at != null; },
       get started() { return s.first != null; },
       get first() { return s.first; },
       get last() { return s.at != null ? Date.now() : s.last; },
+      get status() { return s.status || null; },
       elapsed() { return s.acc + (s.at != null ? Date.now() - s.at : 0); },
-      start() { if (s.first == null) s.first = Date.now(); s.at = Date.now(); save(); },
+      setStatus(text) { s.status = text || null; save(); },
+      start() { if (s.first == null) { s.first = Date.now(); noteSessionStart(s.first); } s.at = Date.now(); save(); },
       pause() { s.acc = this.elapsed(); s.at = null; s.last = Date.now(); save(); },
-      reset() { s.acc = 0; s.at = null; s.first = null; s.last = null; save(); },
+      reset() { s.acc = 0; s.at = null; s.first = null; s.last = null; s.status = null; save(); },
     };
   }
   const timer = makeRun('focus.run.timer');
   const sw = makeRun('focus.run.stopwatch');
   const timerMs = () => settings.timerMin * 60000;
+  const inSession = () => timer.started || sw.started; // a session lasts until its timer or stopwatch is finished
+  const currentStatus = () => (timer.running ? timer.status : sw.running ? sw.status : null);
+  // the first session started today is remembered by its start time, so it still counts after a reload
+  function noteSessionStart(at) {
+    const today = dayKey(new Date()), d = store.get('focus.dayStart', null);
+    if (!d || d.day !== today) store.set('focus.dayStart', { day: today, at });
+  }
+  function isFirstSessionToday() {
+    const d = store.get('focus.dayStart', null);
+    return !!d && d.day === dayKey(new Date()) && [timer, sw].some(r => r.started && r.first === d.at);
+  }
 
   function finish(run, source, capMs) {
     const ms = capMs != null ? Math.min(run.elapsed(), capMs) : run.elapsed();
@@ -88,17 +124,42 @@
     run.reset();
     if (ms >= 1000) askTask({ ms, start, end, source });
     tick();
+    checkInbox(); // a finished session releases cheers that were held for it
   }
 
   $('#timerToggle').addEventListener('click', () => {
-    if (timer.running) timer.pause();
-    else { audioCtx(); timer.start(); toast(ALARM_TEXT[settings.alarm]); }
-    tick();
+    if (timer.running) { timer.pause(); tick(); return; }
+    beginRun(timer, () => { audioCtx(); toast(settings.sound ? ALARM_TEXT[settings.alarm] : 'Sound effects are off · the timer will end silently'); });
   });
   $('#toast').addEventListener('click', () => { $('#toast').classList.remove('show'); openSettings(); });
   $('#timerStop').addEventListener('click', () => finish(timer, 'timer', timerMs()));
-  $('#swToggle').addEventListener('click', () => { sw.running ? sw.pause() : sw.start(); tick(); });
+  $('#swToggle').addEventListener('click', () => { if (sw.running) { sw.pause(); tick(); } else beginRun(sw); });
   $('#swStop').addEventListener('click', () => finish(sw, 'stopwatch'));
+
+  // ---------- session status: asked when a fresh timer or stopwatch starts ----------
+  const cleanStatus = v => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || null;
+  const statusDialog = $('#statusDialog');
+  let pendingStart = null;
+  function beginRun(run, after) {
+    if (run.started || !settings.askStatus) { run.start(); if (after) after(); tick(); return; } // resuming keeps the old status
+    pendingStart = { run, after };
+    $('#statusInput').value = '';
+    statusDialog.showModal();
+    $('#statusInput').focus();
+  }
+  statusDialog.addEventListener('close', () => { pendingStart = null; }); // Esc or Cancel: nothing starts
+  $('#statusCancel').addEventListener('click', () => statusDialog.close());
+  $('#statusForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const p = pendingStart;
+    if (!p) return;
+    statusDialog.close();
+    p.run.setStatus(cleanStatus($('#statusInput').value));
+    p.run.start();
+    if (p.after) p.after();
+    tick();
+  });
+  function setLine(node, text) { node.hidden = !text; node.textContent = text || ''; }
 
   function setTimerMin(m) {
     m = Math.round(Number(m));
@@ -127,7 +188,7 @@
     o.connect(g).connect(ac.destination); o.start(at); o.stop(at + len + .05);
   }
   function playAlarm(kind = settings.alarm) {
-    const ac = kind === 'off' ? null : audioCtx();
+    const ac = settings.sound ? audioCtx() : null;
     if (!ac) return;
     const t = ac.currentTime + .05;
     if (kind === 'abrupt') { // classic alarm clock: four quick beeps, repeated
@@ -137,7 +198,7 @@
     }
   }
 
-  const ALARM_TEXT = { gentle: 'Alarm on · gentle chime', abrupt: 'Alarm on · abrupt beeps', off: 'Alarm off · the timer will end silently' };
+  const ALARM_TEXT = { gentle: 'Alarm on · gentle chime', abrupt: 'Alarm on · abrupt beeps' };
   let toastTimer;
   function toast(text) {
     const t = $('#toast');
@@ -173,6 +234,7 @@
     setDigits($('#timerDisplay'), fmtClock(Math.ceil(left / 1000) * 1000));
     $('#timerToggle').textContent = timer.running ? 'Pause' : timer.started ? 'Resume' : 'Start';
     $('#timerStop').hidden = !timer.started;
+    setLine($('#timerStatus'), timer.started ? timer.status : null);
     $('#timerPresets').hidden = timer.started;
     let preset = false;
     document.querySelectorAll('#timerPresets button').forEach(b => {
@@ -185,6 +247,7 @@
     setDigits($('#swDisplay'), fmtClock(sw.elapsed(), true));
     $('#swToggle').textContent = sw.running ? 'Pause' : sw.started ? 'Resume' : 'Start';
     $('#swStop').hidden = !sw.started;
+    setLine($('#swStatus'), sw.started ? sw.status : null);
 
     const focusing = timer.running || sw.running; // focus mode = a timer or stopwatch is actually running
     if (focusing !== wasFocusing) { wasFocusing = focusing; beat(); }
@@ -369,7 +432,7 @@
   const openSettings = () => { $('#cityResults').replaceChildren(); $('#cityInput').value = ''; $('#profMsg').textContent = ''; renderPlace(); renderProfile(); setDialog.showModal(); };
   $('#openSet').addEventListener('click', openSettings);
   $('#place').addEventListener('click', () => { openSettings(); $('#cityInput').focus(); });
-  for (const d of [calDialog, setDialog]) {
+  for (const d of [calDialog, setDialog, $('#loungeDialog')]) {
     d.addEventListener('click', e => {
       const r = d.getBoundingClientRect();
       const outside = e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom);
@@ -431,7 +494,11 @@
   });
 
   // ---------- profile, sync across devices, focusing together ----------
-  const API = 'https://focus-api.tiffanyngai817.workers.dev';
+  // Local testing: open the page with ?api=http://localhost:8787 (wrangler dev). Only localhost is accepted,
+  // so a shared link can never send a profile's sync code to another server.
+  const devApi = new URLSearchParams(location.search).get('api');
+  const API = /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(devApi || '') && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+    ? devApi : 'https://focus-api.tiffanyngai817.workers.dev';
   let clientId = store.get('focus.client', null);
   if (!clientId) { clientId = (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); store.set('focus.client', clientId); }
 
@@ -477,14 +544,57 @@
 
   function renderProfile() {
     const p = settings.profile;
-    $('#profileOut').hidden = !!p; $('#profileIn').hidden = !p;
+    $('#profileOut').hidden = !!p; $('#profileIn').hidden = !p; $('#deviceBox').hidden = !p;
     if (!p) return;
     $('#profWho').textContent = p.name;
     $('#profCode').textContent = '••••-••••-••••-••••';
     $('#profShow').textContent = 'Show';
+    renderPicker($('#charPick'));
   }
-  function signedIn(name, code, msg) {
-    settings.profile = { name, code }; saveSettings();
+
+  // Character picker, used in Settings and in the lounge. The choice shows at once and is saved in the background.
+  const DICE = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.3"/><circle cx="15" cy="15" r="1.3"/><circle cx="15" cy="9" r="1.3"/><circle cx="9" cy="15" r="1.3"/><circle cx="12" cy="12" r="1.3"/></svg>';
+  function renderPicker(box) {
+    const p = settings.profile;
+    if (!box || !p) return;
+    const picked = Avatars.resolve(p.character, p.name).id;
+    const tile = (label, art, on, onClick, extra = '') => {
+      const b = el('button', { type: 'button', className: 'char' + (on ? ' on' : '') + extra, title: label });
+      b.setAttribute('aria-pressed', String(on));
+      b.innerHTML = `<span class="char-art">${art}</span>`;
+      b.append(el('span', { className: 'char-name', textContent: label }));
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    box.replaceChildren(
+      tile('Random', DICE, false, () => {
+        const others = Avatars.list.filter(c => c.id !== picked);
+        setCharacter(others[Math.floor(Math.random() * others.length)].id);
+      }, ' random'),
+      ...Avatars.list.map(ch => tile(ch.name, Avatars.svg(ch), ch.id === picked, () => setCharacter(ch.id))));
+  }
+  let charSave = Promise.resolve();
+  function setCharacter(id) {
+    const p = settings.profile;
+    if (!p || p.character === id) return;
+    const before = p.character;
+    p.character = id; saveSettings();
+    if (lastSnap && lastSnap.people) lastSnap.people.forEach(x => { if (x.me) x.character = id; });
+    renderPicker($('#charPick')); renderPicker($('#loungePick')); renderLounge();
+    const name = Avatars.list.find(c => c.id === id).name;
+    $('#profMsg').textContent = `${name} is your character in the lounge.`;
+    charSave = charSave.then(async () => {
+      if (settings.profile !== p || p.character !== id) return; // a newer pick or a sign-out replaced this one
+      try { await api('/profile', 'PATCH', { character: id }); beat(); }
+      catch (err) {
+        if (settings.profile === p && p.character === id) { p.character = before; saveSettings(); }
+        renderPicker($('#charPick')); renderPicker($('#loungePick')); renderLounge();
+        $('#profMsg').textContent = $('#loungeNote').textContent = `Could not save your character: ${err.message}`;
+      }
+    });
+  }
+  function signedIn(name, code, msg, character = null) {
+    settings.profile = { name, code, character }; saveSettings();
     renderProfile();
     $('#profMsg').textContent = msg;
     queueSync({ add: sessions.map(s => s.id) }); // bring what is already on this device into the profile
@@ -510,7 +620,7 @@
     settings.profile = { name, code };
     try {
       const r = await api('/profile');
-      signedIn(r.name, code, 'This device is linked.');
+      signedIn(r.name, code, 'This device is linked.', r.character);
       $('#linkName').value = ''; $('#linkCode').value = '';
     } catch (err) { settings.profile = null; $('#profMsg').textContent = err.message; }
   });
@@ -532,11 +642,11 @@
     const focusing = timer.running || sw.running;
     try {
       lastSnap = focusing || wasFocusing === false && lastSnap && lastSnap.self
-        ? await api('/presence', 'POST', { client: clientId, focusing })
+        ? await api('/presence', 'POST', { client: clientId, focusing, status: focusing ? currentStatus() : null })
         : await api('/presence?client=' + clientId);
       lastSnap.self = focusing;
     } catch { lastSnap = null; }
-    renderTogether();
+    renderTogether(); renderLounge();
   }
   function renderTogether() {
     const chip = $('#together'), s = lastSnap;
@@ -563,11 +673,208 @@
     if (timer.running || sw.running) navigator.sendBeacon(API + '/presence', JSON.stringify({ client: clientId, focusing: false }));
   });
   setInterval(() => queueSync(), 5 * 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { queueSync(); beat(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { queueSync(); beat(); checkInbox(); } });
+
+  // ---------- lounge: a table where everyone focusing right now sits ----------
+  // Seats fill in the order people started. Anyone after the sixth waits in line.
+  const CHEERS = {
+    hello: { label: 'Hello!!', line: 'says hello!!' },
+    luck: { label: 'Good luck to your work', line: 'says good luck to your work' },
+    gotThis: { label: 'You got this!!', line: 'says you got this!!' },
+  };
+  const SEAT_X = [8.5, 25, 41.5, 58, 74.5, 91]; // six chairs along the table, left offset in %
+  let loungeSig = '', seatedBefore = new Set();
+  const loungeDialog = $('#loungeDialog');
+  const sentLog = [];
+  let cheerTo = null;
+
+  async function loadPresence() {
+    const focusing = timer.running || sw.running;
+    try { lastSnap = await api('/presence?client=' + clientId); lastSnap.self = focusing; }
+    catch { lastSnap = null; }
+    renderTogether(); renderLounge();
+  }
+  setInterval(() => { if (loungeDialog.open) loadPresence(); }, 6000);
+
+  function renderLounge() {
+    if (!loungeDialog.open) return;
+    const s = lastSnap || { people: [], guests: 0 };
+    const signed = !!settings.profile, running = timer.running || sw.running;
+    const all = [...(s.people || []), ...Array.from({ length: s.guests || 0 }, (_, i) => ({ guest: true, n: i }))];
+    const sig = JSON.stringify([all, signed, running, settings.profile && settings.profile.character]);
+    if (sig === loungeSig) return; // nothing changed: leave the scene alone so the animations keep going
+    loungeSig = sig;
+
+    renderMine();
+    $('#loungeCount').textContent = all.length ? `${all.length} ${all.length === 1 ? 'person' : 'people'} focusing right now` : 'The room is quiet right now.';
+    const myIdx = all.findIndex(p => p.me), ahead = myIdx - SEAT_X.length + 1;
+    $('#loungeNote').textContent = !signed ? 'Create a profile in Settings to join the lounge and send cheers.'
+      : !running ? 'Start a timer or stopwatch to take a seat. Pick your character in Settings.'
+      : myIdx >= SEAT_X.length ? `The table is full. You are number ${ahead} in line, and you take the next free seat.`
+      : 'Tap someone to send a cheer.';
+
+    const scene = $('#loungeScene'), now = new Set();
+    scene.replaceChildren(decor());
+    SEAT_X.forEach((x, i) => {
+      const p = all[i];
+      const seat = el('div', { className: 'seat' }, el('span', { className: 'chair' }));
+      seat.style.left = x + '%'; seat.style.setProperty('--d', (i * -.7) + 's');
+      if (!p) { seat.classList.add('empty'); seat.title = 'Empty chair'; scene.append(seat); return; }
+      const key = p.guest ? 'guest' + p.n : p.name;
+      now.add(key);
+      if (!seatedBefore.has(key)) seat.style.animation = 'settle .5s ease-out backwards';
+      scene.append(seatContent(seat, p, signed));
+    });
+    scene.append(el('div', { className: 'lounge-table' }));
+    seatedBefore = now;
+
+    const line = all.slice(SEAT_X.length), q = $('#loungeQueue');
+    q.hidden = !line.length;
+    const row = el('div', { className: 'queue-row' });
+    line.slice(0, 12).forEach(p => {
+      const av = el('span', { className: 'queue-av' + (p.me ? ' me' : ''), title: p.guest ? 'Guest' : p.me ? 'You' : p.name });
+      av.innerHTML = p.guest ? Avatars.guest() : Avatars.svg(Avatars.resolve(p.character, p.name));
+      if (!p.guest && !p.me && signed) { av.classList.add('clickable'); av.addEventListener('click', () => openCheer(p.name)); }
+      row.append(av);
+    });
+    if (line.length > 12) row.append(el('span', { className: 'queue-more', textContent: `+${line.length - 12}` }));
+    q.replaceChildren(el('span', { className: 'queue-label', textContent: `Waiting for a seat · ${line.length}` }), row);
+  }
+
+  const DECOR = '<span class="win"><i></i></span><span class="lamp" style="left:30%"></span><span class="lamp" style="left:70%"></span>'
+    + '<span class="shelf"><i></i><i></i></span><span class="plant"><i></i></span>';
+  const decor = () => Object.assign(el('div', { className: 'decor' }), { innerHTML: DECOR });
+  function renderDecor() {
+    const h = new Date().getHours();
+    $('#loungeScene').dataset.sky = h >= 8 && h < 17 ? 'day' : (h >= 17 && h < 20) || (h >= 6 && h < 8) ? 'dusk' : 'night';
+  }
+  function renderMine() {
+    const p = settings.profile, row = $('#loungeMine');
+    row.hidden = !p;
+    if (!p) { $('#loungePick').hidden = true; return; }
+    const ch = Avatars.resolve(p.character, p.name);
+    $('#mineArt').innerHTML = Avatars.svg(ch);
+    $('#mineName').textContent = `You are ${ch.name}`;
+  }
+  $('#mineChange').addEventListener('click', () => {
+    const box = $('#loungePick'), open = box.hidden;
+    box.hidden = !open;
+    $('#mineChange').textContent = open ? 'Done' : 'Change';
+    $('#mineChange').setAttribute('aria-expanded', String(open));
+    if (open) renderPicker(box);
+  });
+
+  function seatContent(seat, p, signed) {
+    const art = el('span', { className: 'figure' });
+    if (p.guest) { seat.classList.add('guest'); art.innerHTML = Avatars.guest(); }
+    else art.innerHTML = Avatars.svg(Avatars.resolve(p.character, p.name));
+    if (p.me) seat.classList.add('me');
+    if (!p.guest) seat.style.setProperty('--acc', Avatars.resolve(p.character, p.name).accent);
+    const kids = [art, el('div', { className: 'gear' }, el('span', { className: 'laptop' }), el('span', { className: 'mug' }))];
+    if (p.status) kids.push(el('span', { className: 'bubble', textContent: p.status, title: p.status }));
+    kids.push(el('span', { className: 'who-tag', textContent: p.guest ? 'Guest' : p.me ? 'You' : p.name, title: p.guest ? '' : p.name }));
+    seat.append(...kids);
+    if (!p.guest && !p.me && signed) {
+      seat.classList.add('clickable');
+      seat.tabIndex = 0;
+      seat.setAttribute('role', 'button');
+      seat.setAttribute('aria-label', `Send ${p.name} a cheer`);
+      seat.addEventListener('click', () => openCheer(p.name));
+      seat.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCheer(p.name); } });
+    }
+    return seat;
+  }
+
+  function openCheer(name) {
+    cheerTo = name;
+    $('#cheerTo').textContent = `Send ${name} a cheer`;
+    $('#cheerBar').hidden = false;
+  }
+  $('#cheerBar').addEventListener('click', e => {
+    if (e.target.id === 'cheerCancel') { cheerTo = null; $('#cheerBar').hidden = true; return; }
+    if (e.target.dataset.cheer && cheerTo) sendCheer(e.target.dataset.cheer);
+  });
+  async function sendCheer(kind) {
+    const to = cheerTo;
+    cheerTo = null; $('#cheerBar').hidden = true;
+    try {
+      const r = await api('/messages', 'POST', { to, kind });
+      sentLog.unshift({ at: r.at, to: r.to, kind });
+      sentLog.length = Math.min(sentLog.length, 5);
+      renderSent();
+    } catch (err) { $('#loungeNote').textContent = err.message; }
+  }
+  function renderSent() {
+    $('#loungeLog').replaceChildren(...sentLog.map(s => el('li', {},
+      el('span', { className: 'when', textContent: fmtWhen(s.at) }),
+      el('span', { textContent: `Sent to ${s.to}: “${CHEERS[s.kind].label}”` }))));
+  }
+  $('#openLounge').addEventListener('click', () => {
+    cheerTo = null; $('#cheerBar').hidden = true;
+    $('#loungePick').hidden = true; $('#mineChange').textContent = 'Change'; $('#mineChange').setAttribute('aria-expanded', 'false');
+    loungeSig = ''; seatedBefore = new Set();
+    renderDecor();
+    loungeDialog.showModal();
+    renderSent(); loadPresence();
+  });
+
+  // ---------- cheers received ----------
+  // Held while hyperfocus is on and a session is running. Released when the session ends or hyperfocus is switched off.
+  const shownNotes = new Set();
+  let inboxBusy = false;
+  async function checkInbox() {
+    if (!settings.profile || inboxBusy || document.hidden) return;
+    if (settings.hyperfocus && inSession()) return;
+    inboxBusy = true;
+    try {
+      const { messages } = await api('/inbox');
+      const fresh = messages.filter(m => !shownNotes.has(m.id));
+      fresh.forEach(showNote);
+      const today = dayKey(new Date());
+      if (fresh.length && inSession() && isFirstSessionToday() && store.get('focus.hintDay', null) !== today) {
+        store.set('focus.hintDay', today); // once a day
+        toast('Press H for hyperfocus to hold cheers until you finish.');
+      }
+      if (messages.length) await api('/inbox/ack', 'POST', { ids: messages.map(m => m.id) });
+    } catch { /* offline: the next check picks them up */ }
+    finally { inboxBusy = false; }
+  }
+  setInterval(checkInbox, 15000);
+
+  // send time of a cheer; held ones can be from yesterday, so those get the day too
+  const fmtWhen = at => dayKey(new Date(at)) === dayKey(new Date()) ? fmtTime(at)
+    : `${new Date(at).toLocaleDateString([], { weekday: 'short' })} ${fmtTime(at)}`;
+  function showNote(m) {
+    shownNotes.add(m.id);
+    const art = el('span', { className: 'note-av' });
+    art.innerHTML = Avatars.svg(Avatars.resolve(m.character, m.from));
+    const x = el('button', { className: 'icon note-x', textContent: '×' });
+    x.title = 'Dismiss'; x.setAttribute('aria-label', 'Dismiss');
+    const card = el('div', { className: 'notice', role: 'status' }, art,
+      el('div', { className: 'note-text' },
+        el('b', { textContent: `${m.from} ${CHEERS[m.kind] ? CHEERS[m.kind].line : 'says hi'}` }),
+        el('time', { textContent: fmtWhen(m.at), dateTime: new Date(m.at).toISOString() })),
+      x);
+    x.addEventListener('click', () => card.remove());
+    const box = $('#notices');
+    box.prepend(card);
+    while (box.children.length > 6) box.lastElementChild.remove();
+  }
+
+  // ---------- keyboard shortcuts: ignored while typing or while a dialog is open ----------
+  document.addEventListener('keydown', e => {
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (document.querySelector('dialog[open]')) return;
+    const act = { s: openSettings, t: () => setView(settings.view === 'nature' ? 'city' : 'nature'),
+      m: () => setSound(!settings.sound), v: () => setMotion(!settings.motion), h: () => setHyper(!settings.hyperfocus) }[e.key.toLowerCase()];
+    if (act) { e.preventDefault(); act(); }
+  });
 
   applyVisibility();
   queueSync();
   tick();
   renderPlace();
   loadWeather();
+  checkInbox();
 })();
